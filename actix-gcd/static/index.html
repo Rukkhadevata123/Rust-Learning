@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GCD Calculator</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="calculator-box">
+            <h1>GCD Calculator</h1>
+            <form action="/gcd" method="post">
+                <div class="input-group">
+                    <label for="a">Enter first number:</label>
+                    <input type="text" id="a" name="a" required>
+                </div>
+                <div class="input-group">
+                    <label for="b">Enter second number:</label>
+                    <input type="text" id="b" name="b" required>
+                </div>
+                <button type="submit" class="submit-btn">Compute GCD</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

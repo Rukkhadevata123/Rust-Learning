@@ -122,7 +122,7 @@ fn extract_pagination(params: HashMap<String, String>) -> Result<Pagination, Err
 async fn get_questions(
     params: HashMap<String, String>,
     store: Store,
-) -> Result<impl warp::Reply, warp::Rejection> {
+) -> Result<impl Reply, Rejection> {
     if !params.is_empty() {
         let pagination = extract_pagination(params)?;
         let res: Vec<Question> = store.questions.read().await.values().cloned().collect();
@@ -137,7 +137,7 @@ async fn get_questions(
 async fn add_question(
     store: Store,
     question: Question,
-) -> Result<impl warp::Reply, warp::Rejection> {
+) -> Result<impl Reply, Rejection> {
     store
         .questions
         .write()
@@ -150,7 +150,7 @@ async fn update_question(
     id: String,
     store: Store,
     question: Question,
-) -> Result<impl warp::Reply, warp::Rejection> {
+) -> Result<impl Reply, Rejection> {
     match store.questions.write().await.get_mut(&QuestionId(id)) {
         Some(q) => {
             *q = question;
@@ -160,17 +160,17 @@ async fn update_question(
     }
 }
 
-async fn delete_question(id: String, store: Store) -> Result<impl warp::Reply, warp::Rejection> {
+async fn delete_question(id: String, store: Store) -> Result<impl Reply, Rejection> {
     match store.questions.write().await.remove(&QuestionId(id)) {
-        Some(_) => return Ok(warp::reply::with_status("Question deleted", StatusCode::OK)),
-        None => return Err(warp::reject::custom(Error::QuestionNotFound)),
+        Some(_) => Ok(warp::reply::with_status("Question deleted", StatusCode::OK)),
+        None => Err(warp::reject::custom(Error::QuestionNotFound)),
     }
 }
 
 async fn add_answer(
     store: Store,
     params: HashMap<String, String>,
-) -> Result<impl warp::Reply, warp::Rejection> {
+) -> Result<impl Reply, Rejection> {
     let answer = Answer {
         id: AnswerId(Uuid::new_v4().to_string()),
         content: params.get("content").unwrap().to_string(),
@@ -185,7 +185,7 @@ async fn add_answer(
     Ok(warp::reply::with_status("Answer added", StatusCode::OK))
 }
 
-async fn get_all_comments(store: Store) -> Result<impl warp::Reply, warp::Rejection> {
+async fn get_all_comments(store: Store) -> Result<impl Reply, Rejection> {
     let res: Vec<Answer> = store.answers.read().await.values().cloned().collect();
     Ok(warp::reply::json(&res))
 }
@@ -193,7 +193,7 @@ async fn get_all_comments(store: Store) -> Result<impl warp::Reply, warp::Reject
 async fn get_comments_by_question_id(
     id: String,
     store: Store,
-) -> Result<impl warp::Reply, warp::Rejection> {
+) -> Result<impl Reply, Rejection> {
     let question_id = QuestionId(id);
     let res: Vec<Answer> = store
         .answers

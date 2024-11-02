@@ -1,0 +1,16 @@
+{
+    "QI0001": {
+        "id": "QI0001",
+        "title": "The capital of France",
+        "content": "What is the capital of France?",
+        "tags": [
+            "geography",
+            "France",
+            "capital"
+        ],
+        "comments": [
+            "I love Paris!"
+        ],
+        "upvotes": null
+    }
+}

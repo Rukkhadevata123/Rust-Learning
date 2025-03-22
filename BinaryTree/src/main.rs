@@ -42,7 +42,7 @@ impl<'a, T: 'a> TreeIter<'a, T> {
     fn push_left_edge(&mut self, mut tree: &'a BinaryTree<T>) {
         while let NonEmpty(ref node) = *tree {
             self.unvisited.push(node);
-            tree = &node.left;
+            tree = &(*node).left;
         }
     }
 }

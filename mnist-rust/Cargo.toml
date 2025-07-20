@@ -1,0 +1,8 @@
+[package]
+name = "mnist-rust"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+burn = { version = "~0.18", features = ["std", "tui", "train", "vision", "wgpu", "fusion"], default-features = false }
+image = "0.25"

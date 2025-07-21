@@ -45,9 +45,11 @@ fn load_model<B: Backend>(device: &B::Device) -> Model<B> {
 
     let model: Model<B> = Model::new(device);
 
+    let model_bytes = std::fs::read(model_path()).expect("Failed to read model.bin");
+
     // Load binary record from bytes
     let record = BinBytesRecorder::<FullPrecisionSettings, &'static [u8]>::default()
-        .load(model_path().as_bytes(), &Default::default())
+        .load(&model_bytes, &Default::default())
         .expect("Failed to decode state");
 
     // Load record into model

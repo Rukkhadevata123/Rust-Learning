@@ -11,6 +11,7 @@ env_logger = "0.11"
 log = "0.4"
 anyhow = "1.0"
 bytemuck = { version = "1", features = ["derive"] }
+futures = "0.3"
 
 # Only for wasm
 wasm-bindgen = "0.2"

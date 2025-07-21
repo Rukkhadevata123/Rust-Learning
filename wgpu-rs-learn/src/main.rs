@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use futures::channel::oneshot;
 use log::{error, info};
 use pollster::block_on;
 use std::borrow::Cow;
@@ -14,6 +15,8 @@ use winit::{
 #[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::ControlFlow;
 
+const BUFFER_SIZE: u32 = 1000;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
@@ -21,7 +24,16 @@ struct Vertex {
     color: [f32; 4],
 }
 
-// 1、定义三角形的顶点数据
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Params {
+    buffer_size: u32,
+    scale: f32,
+    offset: f32,
+    _pad: f32,
+}
+
+// Triangle vertex data
 const VERTICES: &[Vertex] = &[
     Vertex {
         position: [0.0, 0.5, 0.0, 1.0],
@@ -37,19 +49,22 @@ const VERTICES: &[Vertex] = &[
     },
 ];
 
-// 2、定义应用程序结构体，保存窗口、GPU相关对象
+// App struct to hold all GPU and window state
 struct App<'a> {
     window: Option<Arc<Window>>,
     surface: Option<wgpu::Surface<'a>>,
     device: Option<wgpu::Device>,
     queue: Option<wgpu::Queue>,
     render_pipeline: Option<wgpu::RenderPipeline>,
+    compute_pipeline: Option<wgpu::ComputePipeline>,
+    compute_bind_group: Option<wgpu::BindGroup>,
+    output_buffer: Option<wgpu::Buffer>,
+    staging_buffer: Option<wgpu::Buffer>,
     vertex_buffer: Option<wgpu::Buffer>,
     config: Option<wgpu::SurfaceConfiguration>,
 }
 
 impl App<'_> {
-    // 3、构造函数，初始化各字段为None
     fn new() -> Self {
         Self {
             window: None,
@@ -57,21 +72,24 @@ impl App<'_> {
             device: None,
             queue: None,
             render_pipeline: None,
+            compute_pipeline: None,
+            compute_bind_group: None,
+            output_buffer: None,
+            staging_buffer: None,
             vertex_buffer: None,
             config: None,
         }
     }
 
-    // 4、初始化WebGPU相关资源
+    // 1. Initialize all wgpu resources and pipelines
     async fn init_webgpu(&mut self) -> Result<()> {
-        // 4.1、获取窗口并设置大小
+        // 1.1 Create window and set minimum size
         let window = self.window.as_ref().unwrap().clone();
         let mut size = window.inner_size();
         size.width = size.width.max(800);
         size.height = size.height.max(600);
 
-        info!("Initializing wgpu instance and surface");
-        // 4.2、创建wgpu实例和surface
+        // 1.2 Create wgpu instance and surface
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
@@ -80,8 +98,7 @@ impl App<'_> {
             .create_surface(window)
             .context("Failed to create surface")?;
 
-        info!("Requesting adapter");
-        // 4.3、请求适配器
+        // 1.3 Request adapter
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -91,24 +108,31 @@ impl App<'_> {
             .await
             .context("Failed to request adapter")?;
 
-        info!("Requesting device and queue");
-        // 4.4、请求设备和队列
+        // 1.4 Request device and queue
+        let limits = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 8,
+            max_storage_buffer_binding_size: 1 << 24,
+            max_compute_workgroup_size_x: 256,
+            max_compute_workgroup_size_y: 8,
+            max_compute_workgroup_size_z: 8,
+            max_compute_invocations_per_workgroup: 256,
+            max_compute_workgroups_per_dimension: 65535,
+            ..wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits: limits,
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
             })
             .await
             .context("Failed to request device")?;
 
-        // 4.5、获取表面能力和格式，配置表面
+        // 1.5 Configure surface
         let swapchain_capabilities = surface.get_capabilities(&adapter);
         let swapchain_format = swapchain_capabilities.formats[0];
-
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
@@ -121,23 +145,27 @@ impl App<'_> {
         };
         surface.configure(&device, &config);
 
-        // 4.6、加载着色器
+        // 1.6 Load shaders
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
                 "../shaders/graphic_shader.wgsl"
             ))),
         });
+        let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!(
+                "../shaders/compute_shader.wgsl"
+            ))),
+        });
 
-        // 4.7、创建渲染管线布局
+        // 1.7 Create render pipeline
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
                 bind_group_layouts: &[],
                 push_constant_ranges: &[],
             });
-
-        // 4.8、定义顶点缓冲区布局
         let vertex_buffer_layout = wgpu::VertexBufferLayout {
             array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -154,10 +182,8 @@ impl App<'_> {
                 },
             ],
         };
-
-        // 4.9、创建渲染管线
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
+            label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -182,7 +208,6 @@ impl App<'_> {
                     }),
                 ],
             }),
-
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
@@ -196,26 +221,173 @@ impl App<'_> {
             cache: None,
         });
 
-        // 4.10、创建顶点缓冲区
+        // 1.8 Create vertex buffer
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        // 4.11、保存所有资源到结构体
+        // 1.9 Create compute buffers and bind group
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Compute Output Buffer"),
+            size: BUFFER_SIZE as wgpu::BufferAddress * size_of::<f32>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let params = Params {
+            buffer_size: BUFFER_SIZE,
+            scale: 1000.0,
+            offset: 0.0,
+            _pad: 0.0,
+        };
+        let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Params Buffer"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let compute_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Compute Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+        let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Compute Bind Group"),
+            layout: &compute_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute Pipeline"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Compute Pipeline Layout"),
+                    bind_group_layouts: &[&compute_bind_group_layout],
+                    push_constant_ranges: &[],
+                }),
+            ),
+            module: &compute_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer"),
+            size: BUFFER_SIZE as wgpu::BufferAddress * size_of::<f32>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // 1.10 Save all resources
         self.surface = Some(surface);
         self.device = Some(device);
         self.queue = Some(queue);
         self.render_pipeline = Some(render_pipeline);
+        self.compute_pipeline = Some(compute_pipeline);
+        self.compute_bind_group = Some(compute_bind_group);
+        self.output_buffer = Some(output_buffer);
+        self.staging_buffer = Some(staging_buffer);
         self.vertex_buffer = Some(vertex_buffer);
         self.config = Some(config);
 
-        info!("WebGPU initialized successfully");
         Ok(())
     }
 
-    // 5、渲染函数，绘制三角形
+    // 2. Run compute shader and read back results asynchronously
+    fn run_compute(&mut self) {
+        if let (
+            Some(device),
+            Some(queue),
+            Some(compute_pipeline),
+            Some(compute_bind_group),
+            Some(output_buffer),
+            Some(staging_buffer),
+        ) = (
+            &self.device,
+            &self.queue,
+            &self.compute_pipeline,
+            &self.compute_bind_group,
+            &self.output_buffer,
+            &self.staging_buffer,
+        ) {
+            // 2.1 Encode compute and copy commands
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Compute Pass"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(compute_pipeline);
+                cpass.set_bind_group(0, compute_bind_group, &[]);
+                cpass.dispatch_workgroups((BUFFER_SIZE + 63) / 64, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(
+                output_buffer,
+                0,
+                staging_buffer,
+                0,
+                BUFFER_SIZE as wgpu::BufferAddress * size_of::<f32>() as wgpu::BufferAddress,
+            );
+            queue.submit(Some(encoder.finish()));
+
+            // 2.2 Request async buffer mapping
+            let buffer_slice = staging_buffer.slice(..);
+            let (sender, receiver) = oneshot::channel();
+            buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
+                sender.send(v).expect("Failed to send map_async result");
+            });
+
+            // 2.3 Poll device to drive GPU and callback
+            device
+                .poll(wgpu::PollType::Wait)
+                .expect("Failed to poll device");
+
+            // 2.4 Await mapping result and print first 10 values
+            block_on(async {
+                if let Ok(Ok(())) = receiver.await {
+                    let data = buffer_slice.get_mapped_range();
+                    let result: &[f32] = bytemuck::cast_slice(&data);
+                    println!("Compute results: {:?}", &result[..100]);
+                    drop(data);
+                    staging_buffer.unmap();
+                } else {
+                    eprintln!("Failed to map buffer");
+                }
+            });
+        }
+    }
+
+    // 3. Render triangle
     fn render(&mut self) {
         if let (
             Some(surface),
@@ -232,7 +404,6 @@ impl App<'_> {
             &self.vertex_buffer,
             &self.config,
         ) {
-            // 5.1、获取当前帧
             let frame = match surface.get_current_texture() {
                 Ok(frame) => frame,
                 Err(e) => {
@@ -241,8 +412,6 @@ impl App<'_> {
                     return;
                 }
             };
-
-            // 5.2、创建视图和命令编码器
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -264,9 +433,7 @@ impl App<'_> {
 
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
             {
-                // 5.3、开始渲染通道
                 let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: None,
                     color_attachments: &[
@@ -293,35 +460,31 @@ impl App<'_> {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
-
-                // 5.4、设置管线和顶点缓冲区，绘制
                 render_pass.set_pipeline(pipeline);
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
                 render_pass.draw(0..VERTICES.len() as u32, 0..1);
             }
-
-            // 5.5、提交命令并展示帧
             queue.submit(std::iter::once(encoder.finish()));
             frame.present();
         }
     }
 }
 
-// 6、实现winit的ApplicationHandler，处理窗口事件
+// ApplicationHandler for winit event loop
 impl ApplicationHandler for App<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // 6.1、创建窗口
         let window_attributes = Window::default_attributes()
             .with_title("WebGPU Triangle")
             .with_inner_size(winit::dpi::LogicalSize::new(1024, 768));
-
         let window = event_loop.create_window(window_attributes).unwrap();
         self.window = Some(Arc::new(window));
 
-        // 6.2、初始化WebGPU
         if let Err(e) = block_on(self.init_webgpu()) {
             error!("Failed to initialize WebGPU: {e:?}");
+        } else {
+            self.run_compute();
         }
+        self.window.as_ref().unwrap().request_redraw();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -333,7 +496,6 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::Resized(size) => {
                 if size.width == 0 || size.height == 0 {
-                    // 跳过最小化或隐藏时的resize
                     return;
                 }
                 if let (Some(surface), Some(device), Some(config)) =
@@ -351,7 +513,6 @@ impl ApplicationHandler for App<'_> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-// 7、桌面端入口函数
 fn main() {
     unsafe {
         std::env::set_var("RUST_LOG", "info");
@@ -365,7 +526,6 @@ fn main() {
 }
 
 #[cfg(target_arch = "wasm32")]
-// 8、Web端入口函数
 pub fn main() {
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -421,6 +581,7 @@ pub fn main() {
                     if let Err(e) = app_clone.borrow_mut().init_webgpu().await {
                         log::error!("Failed to initialize WebGPU: {:?}", e);
                     } else {
+                        // app_clone.borrow_mut().run_compute();
                         let window_arc = app_clone.borrow().window.as_ref().unwrap().clone();
                         unsafe { *state_ptr = WasmAppState::Ready(app_clone) };
                         info!("GPU Initialized. Requesting initial redraw.");

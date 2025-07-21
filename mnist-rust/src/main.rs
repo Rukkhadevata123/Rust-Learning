@@ -1,16 +1,9 @@
-#![recursion_limit = "256"]
-
 use burn::backend::{
     Autodiff,
     wgpu::{Wgpu, WgpuDevice},
 };
+use mnist_rust::{inference, training};
 use std::env;
-
-mod data;
-mod inference;
-mod mnist;
-mod model;
-mod training;
 
 fn main() {
     let device = WgpuDevice::default();

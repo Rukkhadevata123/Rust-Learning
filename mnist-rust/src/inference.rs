@@ -1,13 +1,15 @@
+use crate::training::ARTIFACT_DIR;
 use crate::{model::Model, training::MnistTrainingConfig};
 use burn::{
     config::Config,
     module::Module,
     prelude::*,
-    record::CompactRecorder,
+    record::{BinBytesRecorder, FullPrecisionSettings, Recorder},
     tensor::{self, Tensor},
 };
-
-const ARTIFACT_DIR: &str = "/tmp/burn-mnist-wgpu";
+fn model_path() -> String {
+    format!("{ARTIFACT_DIR}/model.bin")
+}
 
 /// 运行推理的主函数，现在是泛型的
 pub fn run<B: Backend>(device: B::Device, image_path: &str) {
@@ -43,13 +45,13 @@ fn load_model<B: Backend>(device: &B::Device) -> Model<B> {
 
     let model: Model<B> = Model::new(device);
 
-    model
-        .load_file(
-            format!("{ARTIFACT_DIR}/model"),
-            &CompactRecorder::new(),
-            device,
-        )
-        .expect("Trained model not found. Run training first.")
+    // Load binary record from bytes
+    let record = BinBytesRecorder::<FullPrecisionSettings, &'static [u8]>::default()
+        .load(model_path().as_bytes(), &Default::default())
+        .expect("Failed to decode state");
+
+    // Load record into model
+    model.load_record(record)
 }
 
 /// 将图片文件加载并预处理为 Tensor

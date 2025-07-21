@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8"/>
+    <title>Burn MNIST Inference Web Demo</title>
+    <script src="https://cdn.jsdelivr.net/npm/fabric@latest/dist/fabric.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@latest/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@latest/dist/chartjs-plugin-datalabels.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/normalize.min.css@latest/normalize.min.css"/>
+    <style>
+        body {
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #e0e7ef 0%, #f5f7fa 100%);
+            /* Subtle blur effect */
+            backdrop-filter: blur(6px);
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 24px;
+            box-shadow: 0 8px 32px rgba(60, 80, 120, 0.18);
+            padding: 32px 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 24px;
+        }
+
+        h1 {
+            text-align: center;
+            font-weight: 600;
+            font-size: 2rem;
+            margin-bottom: 12px;
+            color: #247ABF;
+            letter-spacing: 1px;
+        }
+
+        .canvas-row {
+            display: flex;
+            gap: 32px;
+            justify-content: center;
+            align-items: flex-start;
+        }
+
+        .canvas-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        canvas {
+            border-radius: 18px;
+            box-shadow: 0 4px 16px rgba(36, 122, 191, 0.12);
+            background: rgba(255, 255, 255, 0.95);
+            border: none;
+            transition: box-shadow 0.2s;
+        }
+
+        #main-canvas {
+            height: 300px;
+            /*filter: blur(1.5px);*/
+            box-shadow: 0 8px 32px rgba(36, 122, 191, 0.18);
+        }
+
+        #scaled-canvas {
+            width: 100px !important;
+            height: 100px !important;
+            filter: blur(0.5px);
+        }
+
+        #chart {
+            width: 600px !important;
+            height: 300px !important;
+        }
+
+        #clear {
+            padding: 10px 32px;
+            border-radius: 8px;
+            border: none;
+            background: #247ABF;
+            color: #fff;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(36, 122, 191, 0.10);
+            transition: background 0.2s;
+        }
+
+        #clear:hover {
+            background: #195a8f;
+        }
+
+        @media (max-width: 900px) {
+            .canvas-row {
+                flex-direction: column;
+                gap: 24px;
+            }
+
+            #chart {
+                width: 300px !important;
+                height: 150px !important;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>Burn MNIST Inference Demo</h1>
+    <div class="canvas-row">
+        <div class="canvas-col">
+            <span>Draw a digit</span>
+            <canvas id="main-canvas" width="300" height="300"></canvas>
+            <button id="clear">Clear</button>
+        </div>
+        <div class="canvas-col">
+            <!--            <span>Cropped &amp; Scaled</span>-->
+            <canvas id="scaled-canvas" width="28" height="28" style="display: none"></canvas>
+            <canvas id="crop-canvas" width="28" height="28" style="display: none"></canvas>
+        </div>
+        <div class="canvas-col">
+            <span>Probability Result</span>
+            <canvas id="chart"></canvas>
+        </div>
+    </div>
+    <div style="text-align:center; margin-top:12px; font-size:1.1rem; color:#247ABF;">
+        The model is built using Web Assembly and runs entirely in the browser.<br>
+        The code can be found <a href="https://github.com/Rukkhadevata123/Rust-Learning/tree/main/mnist-web"
+                                 target="_blank" style="color:#195a8f; text-decoration:underline;">here</a>.
+    </div>
+    <div style="text-align:center; margin-top:16px; font-size:1rem; color:#888;">
+        Highly inspired by
+        <a href="https://github.com/tracel-ai/burn/tree/main/examples/mnist-inference-web"
+           target="_blank" style="color:#247ABF; text-decoration:underline;">
+            https://github.com/tracel-ai/burn/tree/main/examples/mnist-inference-web
+        </a>
+    </div>
+</div>
+<script type="module">
+    import {$, cropScaleGetImageData, toFixed, chartConfigBuilder} from "./index.js";
+    import {default as wasm, Mnist} from "./pkg/mnist_web.js";
+
+    const chart = chartConfigBuilder($("chart"));
+    const mainCanvasEl = $("main-canvas");
+    const scaledCanvasEl = $("scaled-canvas");
+    const cropEl = $("crop-canvas");
+    const mainContext = mainCanvasEl.getContext("2d", {willReadFrequently: true});
+    const cropContext = cropEl.getContext("2d", {willReadFrequently: true});
+    const scaledContext = scaledCanvasEl.getContext("2d", {willReadFrequently: true});
+    const fabricCanvas = new fabric.Canvas(mainCanvasEl, {isDrawingMode: true});
+    const backgroundColor = "rgba(255, 255, 255, 255)";
+    fabricCanvas.freeDrawingBrush.width = 20;
+    fabricCanvas.backgroundColor = backgroundColor;
+    $("clear").onclick = function () {
+        fabricCanvas.clear();
+        fabricCanvas.backgroundColor = backgroundColor;
+        fabricCanvas.renderAll();
+        mainContext.clearRect(0, 0, mainCanvasEl.width, mainCanvasEl.height);
+        scaledContext.clearRect(0, 0, scaledCanvasEl.width, scaledCanvasEl.height);
+        chart.data.datasets[0].data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        chart.update();
+    };
+    let timeoutId;
+    let isDrawing = false;
+    let isTimeOutSet = false;
+    wasm().then((module) => {
+        const mnist = new Mnist();
+
+        // Warm up WASM with dummy data
+        mnist.inference(new Float32Array(28 * 28));
+
+        async function fireOffInference() {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(async () => {
+                isTimeOutSet = true;
+                fabricCanvas.freeDrawingBrush._finalizeAndAddPath();
+                const data = cropScaleGetImageData(mainContext, cropContext, scaledContext);
+                const output = await mnist.inference(data);
+                chart.data.datasets[0].data = output;
+                chart.update();
+                isTimeOutSet = false;
+            }, 50);
+            isTimeOutSet = true;
+        }
+
+        fabricCanvas.on("mouse:down", function (event) {
+            isDrawing = true;
+        });
+        fabricCanvas.on("mouse:up", async function (event) {
+            isDrawing = false;
+            await fireOffInference();
+        });
+        fabricCanvas.on("mouse:move", async function (event) {
+            if (isDrawing && isTimeOutSet == false) {
+                await fireOffInference();
+            }
+        });
+    });
+</script>
+</body>
+</html>

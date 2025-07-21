@@ -3,7 +3,7 @@ use burn::{
     data::dataloader::DataLoaderBuilder,
     optim::{AdamConfig, decay::WeightDecayConfig},
     prelude::*,
-    record::CompactRecorder,
+    record::{CompactRecorder, NoStdTrainingRecorder},
     tensor::backend::AutodiffBackend,
     train::{
         LearnerBuilder,
@@ -11,7 +11,7 @@ use burn::{
     },
 };
 
-static ARTIFACT_DIR: &str = "/tmp/burn-mnist-wgpu";
+pub static ARTIFACT_DIR: &str = "burn-mnist-wgpu";
 static DATASET_DIR: &str = "dataset";
 
 #[derive(Config)]
@@ -67,8 +67,12 @@ pub fn run<B: AutodiffBackend>(device: B::Device) {
 
     // 保存训练配置和最终模型
     config.save(format!("{ARTIFACT_DIR}/config.json")).unwrap();
+
     model_trained
-        .save_file(format!("{ARTIFACT_DIR}/model"), &CompactRecorder::new())
+        .save_file(
+            format!("{ARTIFACT_DIR}/model"),
+            &NoStdTrainingRecorder::new(),
+        )
         .expect("Failed to save trained model");
 
     println!("\n✅ Training complete. Model saved in {ARTIFACT_DIR}");

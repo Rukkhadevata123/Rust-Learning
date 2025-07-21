@@ -1,0 +1,15 @@
+{
+  "optimizer": {
+    "weight_decay": {
+      "penalty": 0.00005
+    },
+    "grad_clipping": null,
+    "beta_1": 0.9,
+    "beta_2": 0.999,
+    "epsilon": 0.00001
+  },
+  "num_epochs": 10,
+  "batch_size": 64,
+  "num_workers": 4,
+  "seed": 42
+}

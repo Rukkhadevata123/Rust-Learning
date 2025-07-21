@@ -1,0 +1,16 @@
+[package]
+name = "mnist-web"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+burn = { version = "~0.18", features = ["std", "wgpu", "fusion"], default-features = false }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# RUSTFLAGS='--cfg getrandom_backend="wasm_js"'
+js-sys = "0.3"
+wasm-bindgen = "0.2.100"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+
+[lib]
+crate-type = ["cdylib", "rlib"]

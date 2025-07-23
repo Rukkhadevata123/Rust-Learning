@@ -349,7 +349,7 @@ impl App<'_> {
                 });
                 cpass.set_pipeline(compute_pipeline);
                 cpass.set_bind_group(0, compute_bind_group, &[]);
-                cpass.dispatch_workgroups((BUFFER_SIZE + 63) / 64, 1, 1);
+                cpass.dispatch_workgroups(BUFFER_SIZE.div_ceil(64), 1, 1);
             }
             encoder.copy_buffer_to_buffer(
                 output_buffer,
